@@ -1,4 +1,4 @@
-import { redisCmd, redisPipeline } from './_redis.js';
+import { redisCmd } from './_redis.js';
 import nacl from 'tweetnacl';
 import { createCipheriv, randomBytes, createHash } from 'crypto';
 
@@ -48,32 +48,14 @@ export default async function handler(req, res) {
     return res.status(400).end();
   }
 
-  // DEBUG logging removed (was burning Advanced Operations on every POST).
-  // To re-enable temporarily, uncomment the block below.
-  /*
-  try {
-    const dbg = {
-      ts: new Date().toISOString(),
-      headers: {
-        'user-agent': req.headers['user-agent'],
-        'x-bot-appid': req.headers['x-bot-appid'],
-        'x-signature-ed25519': req.headers['x-signature-ed25519'] ? 'present' : 'absent',
-        'x-signature-timestamp': req.headers['x-signature-timestamp'],
-      },
-      bodyPreview: rawBody.toString('utf8').slice(0, 500),
-    };
-    await put(`qq-debug/${Date.now()}.json`, JSON.stringify(dbg), {
-      access: 'public', contentType: 'application/json', addRandomSuffix: false,
-    });
-  } catch {}
-  */
-
   let payload;
   try {
     payload = JSON.parse(rawBody.toString('utf8'));
   } catch {
     return res.status(400).end();
   }
+
+  console.info('[qq-webhook] received', { op: payload?.op, signed: !!req.headers['x-signature-ed25519'] });
 
   // op 13: QQ verifying our callback URL. Respond with signed plain_token.
   if (payload && payload.op === 13) {
@@ -106,26 +88,23 @@ export default async function handler(req, res) {
 
   // Queue the verified event in Upstash Redis (replaces Vercel Blob - quota exhausted).
   // Dedup: SISMEMBER on qq:seen set. Queue: LPUSH to qq:queue. Seq: INCR qq:seq.
-  const qqEventId = (payload.d && payload.d.id) ? String(payload.d.id) : null;
-  const eventKey = qqEventId ? qqEventId.replace(/[^a-zA-Z0-9._-]/g, '_') : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const qqEventId = payload.id || (payload.d && payload.d.id) || null;
+  const eventKey = qqEventId ? String(qqEventId).replace(/[^a-zA-Z0-9._-]/g, '_') : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const encrypted = encrypt(rawBody.toString('utf8'));
   const queueItem = JSON.stringify({ id: eventKey, uploadedAt: new Date().toISOString(), body: encrypted });
   try {
-    if (qqEventId) {
-      const isDup = await redisCmd('SISMEMBER', 'qq:seen', eventKey);
-      if (isDup === 1) {
-        return res.status(200).json({ ok: true, deduped: true });
-      }
-    }
-    // Atomic: add to seen set, push to queue, bump seq, set expiry
-    await redisPipeline([
-      ['SADD', 'qq:seen', eventKey],
-      ['EXPIRE', 'qq:seen', '604800'],
-      ['LPUSH', 'qq:queue', queueItem],
-      ['INCR', 'qq:seq'],
-    ]);
+    // One script prevents concurrent QQ retries from both entering the queue.
+    await redisCmd('EVAL', `
+      if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 1 then return 0 end
+      redis.call('LPUSH', KEYS[2], ARGV[2])
+      redis.call('INCR', KEYS[3])
+      redis.call('SADD', KEYS[1], ARGV[1])
+      redis.call('EXPIRE', KEYS[1], 604800)
+      return 1
+    `, '3', 'qq:seen', 'qq:queue', 'qq:seq', eventKey, queueItem);
   } catch (e) {
     return res.status(500).json({ error: 'queue_failed', detail: String(e && e.message || e).slice(0, 200) });
   }
-  return res.status(200).json({ ok: true });
+  console.info('[qq-webhook] accepted', { type: payload.t || null });
+  return res.status(200).json({ op: 12 });
 }

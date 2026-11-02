@@ -62,10 +62,7 @@ export default async function handler(req, res) {
       }
     }
     // Drain the queue (for backward compat; qq-wait is preferred)
-    const items = await redisCmd('LRANGE', 'qq:queue', '0', '-1');
-    if (items && items.length > 0) {
-      await redisCmd('DEL', 'qq:queue');
-    }
+    const items = await redisCmd('EVAL', "local v = redis.call('LRANGE', KEYS[1], 0, -1); redis.call('DEL', KEYS[1]); return v", '1', 'qq:queue');
     const seq = parseInt((await redisCmd('GET', 'qq:seq')) || '0', 10) || 0;
     const events = [];
     for (const item of items || []) {

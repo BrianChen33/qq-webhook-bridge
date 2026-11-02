@@ -27,28 +27,6 @@ function decrypt(payload) {
   return Buffer.concat([d.update(ct), d.final()]).toString('utf8');
 }
 
-async function drainQueue() {
-  const items = await redisCmd('LRANGE', 'qq:queue', '0', '-1');
-  if (items && items.length > 0) {
-    await redisCmd('DEL', 'qq:queue');
-  }
-  const seq = parseInt((await redisCmd('GET', 'qq:seq')) || '0', 10) || 0;
-  const events = [];
-  for (const item of items || []) {
-    try {
-      const parsed = JSON.parse(item);
-      events.push({
-        id: parsed.id,
-        uploadedAt: parsed.uploadedAt,
-        url: null,
-        body: decrypt(parsed.body),
-      });
-    } catch {}
-  }
-  events.sort((a, b) => (a.uploadedAt < b.uploadedAt ? -1 : 1));
-  return { events, seq };
-}
-
 export default async function handler(req, res) {
   const expected = process.env.POLL_SECRET;
   const provided = req.query.secret || req.headers['x-poll-secret'];
@@ -60,7 +38,7 @@ export default async function handler(req, res) {
     return res.status(405).end();
   }
 
-  const timeoutSec = Math.min(parseInt(req.query.timeout || '25', 10) || 25, 25);
+  const timeoutSec = Math.max(1, Math.min(parseInt(req.query.timeout || '25', 10) || 25, 25));
 
   // BLPOP blocks up to timeoutSec waiting for an item on qq:queue.
   // Returns [key, value] if item arrives, null on timeout.
@@ -70,10 +48,7 @@ export default async function handler(req, res) {
     if (result && result.length === 2) {
       // Got one event via BLPOP (already popped). Drain any others that arrived.
       const firstItem = result[1];
-      const rest = await redisCmd('LRANGE', 'qq:queue', '0', '-1');
-      if (rest && rest.length > 0) {
-        await redisCmd('DEL', 'qq:queue');
-      }
+      const rest = await redisCmd('EVAL', "local v = redis.call('LRANGE', KEYS[1], 0, -1); redis.call('DEL', KEYS[1]); return v", '1', 'qq:queue');
       const seq = parseInt((await redisCmd('GET', 'qq:seq')) || '0', 10) || 0;
       const allItems = [firstItem, ...(rest || [])];
       const events = [];
@@ -92,11 +67,12 @@ export default async function handler(req, res) {
       return res.status(200).json({ events, seq, timeout: false });
     }
   } catch (e) {
-    // BLPOP failed — fall back to immediate check
-    console.warn('[qq-wait] BLPOP failed:', e.message);
+    console.error('[qq-wait] Redis unavailable:', e.message);
+    res.setHeader('Retry-After', '5');
+    return res.status(503).json({ error: 'queue_unavailable' });
   }
 
-  // Timeout or error: check once more before returning empty
+  // Normal empty-queue timeout.
   const seq = parseInt((await redisCmd('GET', 'qq:seq').catch(() => '0')) || '0', 10) || 0;
   return res.status(200).json({ events: [], seq, timeout: true });
 }
