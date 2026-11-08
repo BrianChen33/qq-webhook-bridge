@@ -1,5 +1,7 @@
 {
   "functions": {
-    "api/qq-wait.js": { "maxDuration": 60 }
+    "api/qq-webhook.js": { "maxDuration": 15 },
+    "api/qq-events.js": { "maxDuration": 15 },
+    "api/qq-wait.js": { "maxDuration": 5 }
   }
 }

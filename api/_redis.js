@@ -15,7 +15,7 @@ async function redisCmd(...args) {
   const res = await fetch(url, {
     method: 'POST',
     headers: { Authorization: `Bearer ${REDIS_TOKEN}` },
-    signal: AbortSignal.timeout(args[0] === 'BLPOP' ? 30000 : 10000),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) throw new Error(`redis ${args[0]} failed: HTTP ${res.status}`);
   const data = await res.json();

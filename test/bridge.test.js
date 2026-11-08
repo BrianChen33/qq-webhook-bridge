@@ -16,7 +16,7 @@ const server = createServer(async (req, res) => {
   const result = args[0] === 'GET' ? '0' : args[0] === 'EVAL' ? 1 : null;
   res.end(JSON.stringify({result}));
 });
-let redis, wait, webhook;
+let redis, wait, webhook, events;
 before(async () => {
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   process.env.UPSTASH_REDIS_REST_URL = `http://127.0.0.1:${server.address().port}`;
@@ -26,6 +26,7 @@ before(async () => {
   redis = await import('../api/_redis.js');
   wait = (await import('../api/qq-wait.js')).default;
   webhook = (await import('../api/qq-webhook.js')).default;
+  events = (await import('../api/qq-events.js')).default;
 });
 after(() => server.close());
 beforeEach(() => { mode='ok'; });
@@ -44,10 +45,20 @@ test('Redis errors cannot look like an empty queue', async () => {
 test('pipeline command errors are propagated', async () => {
   await assert.rejects(redis.redisPipeline([['GET','x']]), /pipeline failure/);
 });
-test('Redis outage returns a retryable error instead of successful timeout', async () => {
-  mode='error'; const res=response();
+test('retired wait route returns immediately without accessing Redis', async () => {
+  mode='error'; commands.length=0; const res=response();
   await wait({method:'GET',query:{timeout:'1'},headers:{'x-poll-secret':'test-poll-secret'}},res);
-  mode='ok'; assert.equal(res.code,503); assert.equal(res.headers['Retry-After'],'5');
+  mode='ok'; assert.equal(res.code,410); assert.equal(commands.length,0);
+});
+
+test('legacy drain and delete routes cannot consume or acknowledge queue items', async () => {
+  commands.length=0;
+  for (const method of ['GET', 'DELETE']) {
+    const res=response();
+    await events({method,query:{},headers:{'x-poll-secret':'test-poll-secret'}},res);
+    assert.equal(res.code,410);
+  }
+  assert.equal(commands.length,0);
 });
 test('verified QQ dispatch receives the protocol ACK after durable enqueue', async () => {
   commands.length=0; const res=response();

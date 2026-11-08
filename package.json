@@ -1,1 +1,1 @@
-{"dependencies":{"tweetnacl":"^1.0.3"},"name":"qq-webhook-bridge","private":true,"type":"module","version":"1.0.0","scripts":{"test":"node --test"}}
+{"dependencies":{"ioredis":"6.0.0","tweetnacl":"^1.0.3"},"name":"qq-webhook-bridge","private":true,"type":"module","version":"1.0.0","scripts":{"test":"node --test"}}

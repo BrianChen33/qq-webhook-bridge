@@ -5,8 +5,8 @@ import { createCipheriv, randomBytes, createHash } from 'crypto';
 // QQ requires the raw body for Ed25519 verification.
 export const config = { api: { bodyParser: false } };
 
-// AES-256-GCM encryption for queued events (store is public-writable only,
-// so payloads are encrypted; the poller endpoint decrypts server-side).
+// AES-256-GCM encryption for queued events. The VM decrypts after claiming an
+// item from Redis and acknowledges only after its durable local handoff.
 function encKey() {
   return createHash('sha256').update(String(process.env.POLL_SECRET || ''), 'utf8').digest();
 }
@@ -86,7 +86,7 @@ export default async function handler(req, res) {
     return res.status(401).end();
   }
 
-  // Queue the verified event in Upstash Redis (replaces Vercel Blob - quota exhausted).
+  // Queue the verified event in Upstash Redis for direct VM consumption.
   // Dedup: SISMEMBER on qq:seen set. Queue: LPUSH to qq:queue. Seq: INCR qq:seq.
   const qqEventId = payload.id || (payload.d && payload.d.id) || null;
   const eventKey = qqEventId ? String(qqEventId).replace(/[^a-zA-Z0-9._-]/g, '_') : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
