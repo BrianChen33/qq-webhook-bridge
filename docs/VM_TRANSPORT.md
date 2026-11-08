@@ -26,6 +26,14 @@ by `QQ_REDIS_CONFIG_FILE` in the service environment. Keep credentials, temporar
 handoff keys and sealed configuration attachments outside source control and
 memory snapshots. A new host needs a fresh authorized credential handoff.
 
+Read the service's actual execution user before choosing this path. Set an
+absolute `QQ_REDIS_CONFIG_FILE` in the unit when its home directory differs
+from the owner who received the configuration. Preserve the host's required
+`NODE_EXTRA_CA_CERTS` environment in services using an approved egress CA bundle.
+The bundle must be available at Node startup, with TLS validation enabled.
+Keep these environment entries in the existing persistent service installer
+as well as the active unit, so host replacement restores the same configuration.
+
 ## Incremental host patch
 
 Read the actual bridge source first. The reference installer recognizes the
